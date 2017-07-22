@@ -1,0 +1,93 @@
+theory SeleneReceiptfreenessFixFast
+begin
+
+builtins: multiset
+
+functions: pk/1,
+           open/3, commit/3, fake/4
+
+equations: open(commit(ni1, r, pk(sk)), r, sk) = ni1,
+           commit(ni2, fake(ni1, r, sk, ni2), pk(sk)) = commit(ni1, r, pk(sk)),
+           open(commit(ni1, r, pk(sk)), fake(ni1, r, sk, ni2), sk) = ni2,
+           fake(n2, fake(n1, r, sk, n2), sk, n3) = fake(n1, r, sk, n3)
+
+rule setup:
+ [ Fr(~ltkV1), Fr(~ltkV2), Fr(~ltkT) ]
+ --[ OnlyOnce() ]->
+ [ Out(pk(~ltkV1)), Out(pk(~ltkV2)), Out(pk(~ltkT)),
+   St_V_0('v1', diff('candA', 'candB'), ~ltkV1, pk(~ltkV1)),
+   St_V_0('v2', diff('candB', 'candA'), ~ltkV2, pk(~ltkV2)),
+   St_T_0('Teller', ~ltkT, pk(~ltkV1), diff('candB', 'candA')),
+   St_T_0('Teller', ~ltkT, pk(~ltkV2), diff('candA', 'candB')) ]
+
+// Generate tracker and commitment and assign to voter
+rule T1:
+  let
+    cmt = commit(~ni0, ~rnd, pkV)
+  in
+  [ Fr(~ni0), Fr(~ni1), Fr(~ni2),
+    Fr(~rnd),
+    St_T_0(Teller, ~ltkT, pkV, other) ]
+  -->
+  [ Out(<pkV, cmt>),
+    !PostCommitment(pkV, cmt),
+    St_T_1(Teller, ~ltkT, pkV, other, ~rnd, ~ni0, ~ni1, ~ni2) ]
+
+// Voting
+rule V1:
+  [ St_V_0(votr, vote, ~ltkV, pkV) ]
+  -->
+  [ SendVote(vote, pkV),
+    St_V_1(votr, vote, ~ltkV, pkV) ]
+
+// Vote received and posted
+rule T2:
+  [ SendVote(vote, pkV),
+    St_T_1(Teller, ~ltkT, pkV, other, ~rnd, ~ni0, ~ni1, ~ni2) ]
+  -->
+  [
+    !PublishTracker(pkV, ~ni0),
+    !PublishTracker(pkV, ~ni2),
+    !PublishVote(~ni0, vote),
+    !PublishVote(~ni1, vote),
+    !PublishVote(~ni2, other),
+    SendSecretToVoter(~rnd) ]
+
+// Voter 1 checks with real and fake commitment, then reveals the tracker
+rule V2_1:
+  let
+    ni0 = open(cmt, rnd, ~ltkV)
+  in
+  [ SendSecretToVoter(rnd),
+    !PostCommitment(pkV, cmt),
+    !PublishTracker(pkV, ~niF),
+    !PublishVote(ni0, vote),
+    !PublishVote(~niF, diff('candB', 'candA')),
+    St_V_1('v1', vote, ~ltkV, pkV) ]
+  --[ CV() ]->
+  [ Out(~ltkV),
+    Out(cmt),
+    Out(diff(ni0, ~niF)),
+    Out(diff(fake(ni0, rnd, ~ltkV, ni0), fake(ni0, rnd, ~ltkV, ~niF))),
+    Out(diff(vote, 'candA')) ]
+
+// Voter 2 checks with real commitment, then reveals the tracker
+rule V2_2:
+  let
+    ni0 = open(cmt, rnd, ~ltkV)
+  in
+  [ SendSecretToVoter(rnd),
+    !PostCommitment(pkV, cmt),
+    !PublishVote(ni0, vote),
+    St_V_1('v2', vote, ~ltkV, pkV) ]
+  --[ CV2() ]->
+  [ Out(ni0) ]
+
+restriction onlyOnce:
+  " All #i #j. OnlyOnce()@i & OnlyOnce()@j ==> #i=#j "
+
+lemma exec2:
+  exists-trace
+  " Ex #i #j. CV()@i & CV2()@j & not(#i=#j) "
+
+end

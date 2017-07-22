@@ -1,0 +1,104 @@
+theory SeleneReceiptfreenessFull
+begin
+
+builtins: multiset
+
+functions: pk/1,
+           open/3, commit/3, fake/4
+
+equations: open(commit(ni1, r, pk(sk)), r, sk) = ni1,
+           commit(ni2, fake(ni1, r, sk, ni2), pk(sk)) = commit(ni1, r, pk(sk)),
+           open(commit(ni1, r, pk(sk)), fake(ni1, r, sk, ni2), sk) = ni2,
+           fake(n2, fake(n1, r, sk, n2), sk, n3) = fake(n1, r, sk, n3)
+
+rule setup:
+ [ Fr(~ltkV1), Fr(~ltkV2), Fr(~ltkT) ]
+ --[ OnlyOnce() ]->
+ [ Out(pk(~ltkV1)), Out(pk(~ltkV2)), Out(pk(~ltkT)),
+   St_V_0('v1', diff('candA', 'candB'), ~ltkV1, pk(~ltkV1)),
+   St_V_0('v2', diff('candB', 'candA'), ~ltkV2, pk(~ltkV2)),
+   St_T_0('Teller', ~ltkT, pk(~ltkV1)),
+   St_T_0('Teller', ~ltkT, pk(~ltkV2)),
+   EA(pk(~ltkV1), pk(~ltkV2)) ]
+
+// EA creates trackers
+rule EA:
+  [ EA(pkV1, pkV2), Fr(~ni1), Fr(~ni2) ]
+  -->
+  [ !Shuffle_trackers(<~ni1, pkV1>  + <~ni2, pkV2>), Out(~ni1 + ~ni2) ]
+
+// Teller creates commitments
+rule T1:
+  let
+    cmt = commit(ni1, ~rnd, pkV)
+  in
+  [ !Shuffle_trackers(<ni1, pkV> + y),
+    Fr(~rnd),
+    St_T_0(Teller, ~ltkT, pkV) ]
+  -->
+  [ Out(<pkV, cmt>), !PostCommitment(pkV, cmt),
+    St_T_1(Teller, ~ltkT, pkV, ~rnd, ni1) ]
+
+// Voting
+rule V1:
+  [ St_V_0(votr, vote, ~ltkV, pkV) ]
+  -->
+  [ SendVote(vote, pkV),
+    St_V_1(votr, vote, ~ltkV, pkV) ]
+
+
+// Teller receives and posts vote
+rule T2:
+  [ St_T_1(Teller, ~ltkT, pkV, rnd, ni1),
+    SendVote(vote, pkV) ]
+  -->
+  [ SendSecretToVoter(rnd),
+    PassVote(vote, ni1) ]
+
+// Synchronize tellers and shuffle votes
+rule T_2_sync:
+  [ PassVote(vote1, ni1), PassVote(vote2, ni2) ]
+  -->
+  [ !PublishVote(<ni1, vote1> + <ni2, vote2>),
+    Out(<ni1, vote1> + <ni2, vote2>) ]
+
+// Voter 1 checks vote, and reveals values
+rule V2_1:
+  let
+    ni1 = open(cmt, rnd, ~ltkV)
+  in
+  [ SendSecretToVoter(rnd),
+    !PostCommitment(pkV, cmt),
+    !PublishVote(<ni1, vote> + <ni2, diff('candB', 'candA')>),
+    St_V_1('v1', vote, ~ltkV, pkV) ]
+  --[ CheckVote() ]->
+  [
+    Out(~ltkV),
+    Out(cmt),
+    Out(diff(ni1, ni2)),
+    Out(diff(fake(ni1, rnd, ~ltkV, ni1), fake(ni1, rnd, ~ltkV, ni2))), // send real/fake tracker receipt
+    Out(diff(vote, 'candA')) // claims always voted for A
+  ]
+
+// Voter 2 checks
+rule V2_2:
+  let
+    ni1 = open(cmt, rnd, ~ltkV)
+  in
+  [ SendSecretToVoter(rnd),
+    !PostCommitment(pkV, cmt),
+    !PublishVote(<ni1, vote> + y),
+    St_V_1('v2', vote, ~ltkV, pkV) ]
+  --[ CheckVote2() ]->
+  [
+    // Out(ni1) // when this is output, there is an attack
+  ]
+
+restriction onlyOnce:
+  " All #i #j. OnlyOnce()@i & OnlyOnce()@j ==> #i=#j "
+
+lemma exec2:
+  exists-trace
+  " Ex #i #j. CheckVote()@i & CheckVote2()@j & not(#i=#j) "
+
+end
